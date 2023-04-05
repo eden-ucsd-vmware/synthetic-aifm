@@ -1,10 +1,10 @@
 extern "C" {
-#include <runtime/runtime.h>
+#include <asm/atomic.h>
 }
 #include "thread.h"
 
 //#include "array.hpp"
-//#include "deref_scope.hpp"
+//#include "deref_scope.hpp
 //#include "device.hpp"
 #include "local_concurrent_hopscotch.hpp"
 #include "helpers.hpp"
@@ -25,6 +25,7 @@ extern "C" {
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <unistd.h>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -32,9 +33,35 @@ extern "C" {
 #include <random>
 #include <vector>
 
+#include "pgfault.h"
+
+/* save a number to a file */
+void fwrite_number(const char* name, unsigned long number) {
+  FILE* fp = fopen(name, "w");
+  fprintf(fp, "%lu", number);
+  fflush(fp);
+  fclose(fp);
+}
+
+/* save unix timestamp of a checkpoint */
+void save_checkpoint(const char* name) {
+  fwrite_number(name, time(NULL));
+}
+
+/* redefined get_core_num() to not assume starting at core 0 */
+inline int get_core_num_v2(void)
+{
+#ifdef STARTING_CORE_ID
+  BUG_ON(get_core_num() - STARTING_CORE_ID > 20);
+  return get_core_num() - STARTING_CORE_ID;
+#else
+  return get_core_num();
+#endif
+}
+
 //using namespace far_memory;
 
-#define ACCESS_ONCE(x) (*(volatile typeof(x) *)&(x))
+// #define ACCESS_ONCE(x) (*(volatile typeof(x) *)&(x))
 
 //namespace far_memory {
 class FarMemTest {
@@ -43,7 +70,7 @@ private:
   constexpr static uint32_t kKeyLen = 12;
   constexpr static uint32_t kValueLen = 4;
   constexpr static uint32_t kLocalHashTableNumEntriesShift = 28;
-  constexpr static uint32_t kRemoteHashTableNumEntriesShift = 28;
+  // constexpr static uint32_t kRemoteHashTableNumEntriesShift = 28;
   constexpr static uint64_t kRemoteHashTableSlabSize = (4ULL << 30) * 1.05;
   constexpr static uint32_t kNumKVPairs = 1 << 27;
 
@@ -114,7 +141,6 @@ private:
   std::unique_ptr<CryptoPP::CBC_Mode_ExternalCipher::Encryption> cbcEncryption;
   std::unique_ptr<CryptoPP::AES::Encryption> aesEncryption;
 
-
   inline void append_uint32_to_char_array(uint32_t n, uint32_t suffix_len,
                                           char *array) {
     uint32_t len = 0;
@@ -133,7 +159,7 @@ private:
     BUG_ON(len <= 0);
     preempt_disable();
     auto guard = helpers::finally([&]() { preempt_enable(); });
-    auto &generator = *generators[get_core_num()];
+    auto &generator = *generators[ get_core_num_v2()];
     std::uniform_int_distribution<int> distribution('a', 'z' + 1);
     for (uint32_t i = 0; i < len; i++) {
       data[i] = char(distribution(generator));
@@ -149,7 +175,7 @@ private:
   inline uint32_t random_uint32() {
     preempt_disable();
     auto guard = helpers::finally([&]() { preempt_enable(); });
-    auto &generator = *generators[get_core_num()];
+    auto &generator = *generators[ get_core_num_v2()];
     std::uniform_int_distribution<uint32_t> distribution(
         0, std::numeric_limits<uint32_t>::max());
     return distribution(generator);
@@ -193,8 +219,9 @@ private:
       thread.Join();
     }
     preempt_disable();
+    std::cout << "preparing on core: " <<  get_core_num_v2() << std::endl;
     zipf_table_distribution<> zipf(kNumReqs, kZipfParamS);
-    auto &generator = generators[get_core_num()];
+    auto &generator = generators[ get_core_num_v2()];
     constexpr uint32_t kPerCoreWinInterval = kReqSeqLen / helpers::kNumCPUs;
     for (uint32_t i = 0; i < kReqSeqLen; i++) {
       auto rand_idx = zipf(*generator);
@@ -276,6 +303,7 @@ private:
 //                                  array_miss_rate_records.end(), 0.0) /
 //                           array_miss_rate_records.size()
 //                    << std::endl;
+    	    save_checkpoint("run_end");
           exit(0);
         }
         prev_us = us;
@@ -294,6 +322,7 @@ private:
     for (uint32_t tid = 0; tid < kNumMutatorThreads; tid++) {
       threads.emplace_back(rt::Thread([&, tid]() {
         uint32_t cnt = 0;
+        std::cout << "benching on core: " <<  get_core_num_v2() << std::endl;
         while (1) {
           if (unlikely(cnt++ % kPrintPerIters == 0)) {
             preempt_disable();
@@ -301,7 +330,7 @@ private:
             preempt_enable();
           }
           preempt_disable();
-          auto core_num = get_core_num();
+          auto core_num =  get_core_num_v2();
           auto req_idx =
               all_zipf_req_indices[core_num][per_core_req_idx[core_num].c];
           if (unlikely(++per_core_req_idx[core_num].c == kReqSeqLen)) {
@@ -336,7 +365,7 @@ private:
             preempt_enable();
           }
           preempt_disable();
-          core_num = get_core_num();
+          core_num =  get_core_num_v2();
           preempt_enable();
           ACCESS_ONCE(req_cnts[tid].c)++;
         }
@@ -350,18 +379,24 @@ private:
 public:
   void do_work() {
     auto hopscotch = new LocalGenericConcurrentHopscotch(kLocalHashTableNumEntriesShift, kRemoteHashTableSlabSize);
+    
     std::cout << "Prepare..." << std::endl;
+    save_checkpoint("preload_start");
     prepare(hopscotch);
+    save_checkpoint("preload_end");
+
 //    auto array_ptr = std::unique_ptr<AppArray>(
 //        manager->allocate_array_heap<ArrayEntry, kNumArrayEntries>());
     auto array_ptr = new ArrayEntry[kNumArrayEntries];
 //    array_ptr->disable_prefetch();
 //    prepare(array_ptr);
+    
     std::cout << "Bench..." << std::endl;
+    save_checkpoint("run_start");
     bench(hopscotch, array_ptr);
   }
 
-  void run(netaddr raddr) {
+  void run() {
     BUG_ON(madvise(all_gen_reqs, sizeof(Req) * kNumReqs, MADV_HUGEPAGE) != 0);
 //    std::unique_ptr<FarMemManager> manager =
 //        std::unique_ptr<FarMemManager>(FarMemManagerFactory::build(
@@ -375,17 +410,23 @@ public:
 int argc;
 FarMemTest test;
 void _main(void *arg) {
-  char **argv = (char **)arg;
-  std::string ip_addr_port(argv[1]);
-  auto raddr = helpers::str_to_netaddr(ip_addr_port);
-  test.run(raddr);
+  /* write pid and wait some time for the saved pid to be added to 
+   * the cgroup to enforce fastswap limits */
+	std::cout << "writing out pid " << getpid() << std::endl;
+	fwrite_number("main_pid", getpid());
+  sleep(1);
+
+  // char **argv = (char **)arg;
+  // std::string ip_addr_port(argv[1]);
+  // auto raddr = helpers::str_to_netaddr(ip_addr_port);
+  test.run();
 }
 
 int main(int _argc, char *argv[]) {
   int ret;
 
-  if (_argc < 3) {
-    std::cerr << "usage: [cfg_file] [ip_addr:port]" << std::endl;
+  if (_argc < 2) {
+    std::cerr << "usage: [cfg_file]" << std::endl;
     return -EINVAL;
   }
 

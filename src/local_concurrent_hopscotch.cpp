@@ -1,6 +1,12 @@
 #include "local_concurrent_hopscotch.hpp"
 #include "hash.hpp"
 #include "helpers.hpp"
+// #include "pgfault.h"
+
+extern "C" {
+#include <base/atomic.h>
+#include <base/compiler.h>
+}
 
 #include <cstring>
 
