@@ -35,30 +35,6 @@ extern "C" {
 
 #include "pgfault.h"
 
-/* save a number to a file */
-void fwrite_number(const char* name, unsigned long number) {
-  FILE* fp = fopen(name, "w");
-  fprintf(fp, "%lu", number);
-  fflush(fp);
-  fclose(fp);
-}
-
-/* save unix timestamp of a checkpoint */
-void save_checkpoint(const char* name) {
-  fwrite_number(name, time(NULL));
-}
-
-/* redefined get_core_num() to not assume starting at core 0 */
-inline int get_core_num_v2(void)
-{
-#ifdef STARTING_CORE_ID
-  BUG_ON(get_core_num() - STARTING_CORE_ID > 20);
-  return get_core_num() - STARTING_CORE_ID;
-#else
-  return get_core_num();
-#endif
-}
-
 //using namespace far_memory;
 
 // #define ACCESS_ONCE(x) (*(volatile typeof(x) *)&(x))
@@ -72,10 +48,10 @@ private:
   constexpr static uint32_t kLocalHashTableNumEntriesShift = 28;
   // constexpr static uint32_t kRemoteHashTableNumEntriesShift = 28;
   constexpr static uint64_t kRemoteHashTableSlabSize = (4ULL << 30) * 1.05;
-  constexpr static uint32_t kNumKVPairs = 1 << 27;
+  constexpr static uint32_t kNumKVPairs = (1 << 27);
 
   // Array.
-  constexpr static uint32_t kNumArrayEntries = 2 << 20; // 2 M entries.
+  constexpr static uint32_t kNumArrayEntries = (2<<20);
   constexpr static uint32_t kArrayEntrySize = 8192;     // 8 K
 
   // Runtime.
@@ -219,7 +195,6 @@ private:
       thread.Join();
     }
     preempt_disable();
-    std::cout << "preparing on core: " <<  get_core_num_v2() << std::endl;
     zipf_table_distribution<> zipf(kNumReqs, kZipfParamS);
     auto &generator = generators[ get_core_num_v2()];
     constexpr uint32_t kPerCoreWinInterval = kReqSeqLen / helpers::kNumCPUs;
@@ -322,7 +297,7 @@ private:
     for (uint32_t tid = 0; tid < kNumMutatorThreads; tid++) {
       threads.emplace_back(rt::Thread([&, tid]() {
         uint32_t cnt = 0;
-        std::cout << "benching on core: " <<  get_core_num_v2() << std::endl;
+        printf("benching on core: %d\n", get_core_num_v2());
         while (1) {
           if (unlikely(cnt++ % kPrintPerIters == 0)) {
             preempt_disable();
@@ -352,7 +327,7 @@ private:
 //              hopscotch->_get(kKeyLen, (const uint8_t *)key.data,
 //                              &value_len, (uint8_t *)value.data, &forwarded);
                 hopscotch->get(kKeyLen, (const uint8_t *)key.data,
-                              &value_len, (uint8_t *)value.data, true);
+                              &value_len, (uint8_t *)value.data, false);
 //              ACCESS_ONCE(local_hashtable_miss_cnts[tid].c) += forwarded;
               array_index += value.num;
             }
@@ -361,6 +336,8 @@ private:
             array_index %= kNumArrayEntries;
             const auto &array_entry = array[array_index];
             preempt_disable();
+            hint_read_fault((void*) array_entry.data);
+            hint_read_fault((void*) ((unsigned long)(array_entry.data) + EDEN_PAGE_SIZE));
             consume_array_entry(array_entry);
             preempt_enable();
           }
@@ -387,7 +364,16 @@ public:
 
 //    auto array_ptr = std::unique_ptr<AppArray>(
 //        manager->allocate_array_heap<ArrayEntry, kNumArrayEntries>());
-    auto array_ptr = new ArrayEntry[kNumArrayEntries];
+#ifdef INITIALIZE_ARRAY
+    /* allocate and touch the memory; used to find out max memory */
+    auto array_ptr = new ArrayEntry[kNumArrayEntries+1]();
+#else
+    /* just allocate memory; this is the default */
+    auto array_ptr = new ArrayEntry[kNumArrayEntries+1];
+#endif
+
+    /* making sure the entries aligns with pages */
+    array_ptr = (FarMemTest::ArrayEntry*) align_up((unsigned long) array_ptr, EDEN_PAGE_SIZE);
 //    array_ptr->disable_prefetch();
 //    prepare(array_ptr);
     

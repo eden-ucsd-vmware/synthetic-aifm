@@ -3,9 +3,41 @@
 extern "C" {
 #include <net/ip.h>
 #include <runtime/tcp.h>
+#include <runtime/thread.h>
 }
 
 #include <string>
+
+/* save a number to a file */
+inline void fwrite_number(const char* name, unsigned long number) {
+  FILE* fp = fopen(name, "w");
+  fprintf(fp, "%lu", number);
+  fflush(fp);
+  fclose(fp);
+}
+
+/* save unix timestamp of a checkpoint */
+inline void save_checkpoint(const char* name) {
+  fwrite_number(name, time(NULL));
+}
+
+/* redefined get_core_num() to be able to run on dual-node server */
+// NUMA node1 CPU(s):   14-27,42-55 (shenango runtime starts at core 15)
+#define CORE_RANGE1_START   15
+#define CORE_RANGE1_END     27
+#define CORE_RANGE1_LENGTH  (CORE_RANGE1_END - CORE_RANGE1_START + 1)
+#define CORE_RANGE2_START   42
+#define CORE_RANGE2_END     55
+inline int get_core_num_v2(void)
+{
+  int coreid = get_core_num();
+  if (coreid >= CORE_RANGE1_START && coreid <= CORE_RANGE1_END)
+    return coreid - CORE_RANGE1_START;
+  else if (coreid >= CORE_RANGE2_START && coreid <= CORE_RANGE2_END)
+    return coreid - CORE_RANGE2_START + CORE_RANGE1_LENGTH;
+  else
+    BUG();
+}
 
 #define NOT_COPYABLE(TypeName)                                                 \
   TypeName(TypeName const &) = delete;                                         \

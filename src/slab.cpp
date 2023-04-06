@@ -14,7 +14,7 @@ void Slab::replenish(uint32_t slab_idx) {
   for (uint32_t i = 0;
        i < kReplenishChunkSize && cur_ + slab_size <= base_.get() + len_;
        i++, cur_ += slab_size) {
-    slabs_[get_core_num()][slab_idx].push_back(cur_);
+    slabs_[get_core_num_v2()][slab_idx].push_back(cur_);
   }
 }
 
@@ -23,7 +23,7 @@ uint8_t *Slab::allocate(uint32_t size) {
   auto guard = helpers::finally([&]() { preempt_enable(); });
 
   auto slab_idx = get_slab_idx(size);
-  auto &slab = slabs_[get_core_num()][slab_idx];
+  auto &slab = slabs_[get_core_num_v2()][slab_idx];
   if (unlikely(slab.empty())) {
     replenish(slab_idx);
     if (unlikely(slab.empty())) {
@@ -40,7 +40,7 @@ void Slab::free(uint8_t *ptr, uint32_t size) {
   auto guard = helpers::finally([&]() { preempt_enable(); });
 
   auto slab_idx = get_slab_idx(size);
-  slabs_[get_core_num()][slab_idx].push_back(ptr);
+  slabs_[get_core_num_v2()][slab_idx].push_back(ptr);
 }
 
 //} // namespace far_memory

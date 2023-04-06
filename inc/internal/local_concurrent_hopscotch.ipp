@@ -2,6 +2,8 @@
 
 #include <cstring>
 
+#include "helpers.hpp"
+
 //namespace far_memory {
 
 template <typename K, typename V>
@@ -44,7 +46,7 @@ FORCE_INLINE void LocalConcurrentHopscotch<K, V>::insert(const K &key,
   bool key_existed = put(sizeof(key), &key, sizeof(val), &val);
   if (!key_existed) {
     preempt_disable();
-    per_core_size_[get_core_num()].data++;
+    per_core_size_[get_core_num_v2()].data++;
     preempt_enable();
   }
 }
@@ -54,7 +56,7 @@ FORCE_INLINE bool LocalConcurrentHopscotch<K, V>::erase(const K &key) {
   bool key_existed = remove(sizeof(key), &key);
   if (key_existed) {
     preempt_disable();
-    per_core_size_[get_core_num()].data--;
+    per_core_size_[get_core_num_v2()].data--;
     preempt_enable();
   }
   return key_existed;
