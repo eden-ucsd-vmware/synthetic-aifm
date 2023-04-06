@@ -1,7 +1,7 @@
 #include "local_concurrent_hopscotch.hpp"
 #include "hash.hpp"
 #include "helpers.hpp"
-// #include "pgfault.h"
+#include "pgfault.h"
 
 extern "C" {
 #include <base/atomic.h>
@@ -17,7 +17,7 @@ LocalGenericConcurrentHopscotch::LocalGenericConcurrentHopscotch(
     : kHashMask_((1 << num_entries_shift) - 1),
       kNumEntries_((1 << num_entries_shift) + kNeighborhood),
       slab_base_addr_(
-          reinterpret_cast<uint64_t>(helpers::allocate_hugepage(data_size))),
+          reinterpret_cast<uint64_t>(malloc(data_size))),
       slab_(reinterpret_cast<uint8_t *>(slab_base_addr_), data_size) {
   // Check overflow.
   BUG_ON(((kHashMask_ + 1) >> num_entries_shift) != 1);
@@ -25,7 +25,7 @@ LocalGenericConcurrentHopscotch::LocalGenericConcurrentHopscotch(
   // Allocate memory for buckets.
   auto size = kNumEntries_ * sizeof(BucketEntry);
   buckets_mem_.reset(
-      reinterpret_cast<uint8_t *>(helpers::allocate_hugepage(size)));
+      reinterpret_cast<uint8_t *>(malloc(size)));
   buckets_ = new (buckets_mem_.get()) BucketEntry[kNumEntries_];
 }
 
@@ -63,16 +63,19 @@ void LocalGenericConcurrentHopscotch::get(uint8_t key_len, const uint8_t *key,
         bucket->spin.UnlockWp();
       }
     });
+    hint_read_fault_pb_safe((void*) bucket, sizeof(BucketEntry));
     timestamp = load_acquire(&(bucket->timestamp));
     uint32_t bitmap = bucket->bitmap;
     while (bitmap) {
       auto offset = helpers::bsf_32(bitmap);
       entry = &buckets_[bucket_idx + offset];
+      hint_read_fault((void*) &entry->ptr);    /* low impact */
       auto *header = entry->ptr;
       auto *slab_val_ptr =
           reinterpret_cast<const char *>(header) + sizeof(KVDataHeader);
       rmb();
       if (likely(entry->ptr)) {
+        hint_read_fault((void*) &header->key_len);
         if (header->key_len == key_len) {
           if (strncmp(slab_val_ptr + header->val_len,
                       reinterpret_cast<const char *>(key), key_len) == 0) {
@@ -133,6 +136,7 @@ bool LocalGenericConcurrentHopscotch::put(uint8_t key_len, const uint8_t *key,
   auto *bucket = &(buckets_[bucket_idx]);
   auto orig_bucket_idx = bucket_idx;
 
+  hint_write_fault_pb_safe(bucket, sizeof(BucketEntry));  /* preload hint */
   while (unlikely(!bucket->spin.TryLockWp())) {
     thread_yield();
   }
@@ -144,6 +148,7 @@ bool LocalGenericConcurrentHopscotch::put(uint8_t key_len, const uint8_t *key,
     auto *bucket = &buckets_[bucket_idx];
     auto *entry = bucket + offset;
     auto *header = entry->ptr;
+    hint_write_fault((void*) header);    /* preload hint */
     if (header->key_len == key_len) {
       auto *slab_val_ptr =
           reinterpret_cast<char *>(header) + sizeof(KVDataHeader);
