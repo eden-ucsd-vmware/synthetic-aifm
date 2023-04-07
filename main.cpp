@@ -32,6 +32,8 @@ extern "C" {
 #include <numeric>
 #include <random>
 #include <vector>
+#include <fstream>
+#include <numeric>
 
 #include "pgfault.h"
 
@@ -157,6 +159,34 @@ private:
     return distribution(generator);
   }
 
+  /* calculate zipf curve */
+  void calculate_and_dump_zipf_curves() {
+    std::cout << "dumping zipf curves" << std::endl;
+    uint32_t buckets = 1000;
+    std::vector<double> zipf_curve(kNumReqs);
+    for (uint32_t c = 0; c < helpers::kNumCPUs; c++) {
+      std::fill(zipf_curve.begin(), zipf_curve.end(), 0);
+      for (uint32_t i = 0; i < kReqSeqLen; i++)
+        zipf_curve[all_zipf_req_indices[c][i]]++;
+      std::sort(zipf_curve.begin(), zipf_curve.end(), std::greater<uint32_t>());
+      // collapse into 1000 buckets
+      std::vector<double> zipf_curve_collapsed(buckets);
+      for (uint32_t i = 0; i < buckets; i++) {
+        uint32_t start = i * (kNumReqs / buckets);
+        uint32_t end = (i + 1) * (kNumReqs / buckets);
+        for (uint32_t j = start; j < end; j++) {
+          zipf_curve_collapsed[i] += zipf_curve[j];
+        }
+      }
+      auto sum = std::accumulate(zipf_curve.begin(), zipf_curve.end(), 0);
+      for (auto &x : zipf_curve_collapsed)
+        x /= sum;
+      std::ofstream ofs("zipf_curve_" + std::to_string(c) + ".txt");
+      for (auto &x : zipf_curve_collapsed)
+        ofs << x << std::endl;
+    }
+  }
+
   void prepare(LocalGenericConcurrentHopscotch *hopscotch) {
     for (uint32_t i = 0; i < helpers::kNumCPUs; i++) {
       std::random_device rd;
@@ -206,6 +236,8 @@ private:
       }
     }
     preempt_enable();
+
+    // calculate_and_dump_zipf_curves();
   }
 
 //  void prepare(AppArray *array) {
