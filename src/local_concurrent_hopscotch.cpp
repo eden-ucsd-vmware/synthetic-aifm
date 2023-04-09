@@ -64,6 +64,7 @@ void LocalGenericConcurrentHopscotch::get(uint8_t key_len, const uint8_t *key,
       }
     });
     hint_read_fault_pb_safe((void*) bucket, sizeof(BucketEntry));
+    // hint_read_fault((void*) &bucket->timestamp);
     timestamp = load_acquire(&(bucket->timestamp));
     uint32_t bitmap = bucket->bitmap;
     while (bitmap) {
@@ -136,19 +137,19 @@ bool LocalGenericConcurrentHopscotch::put(uint8_t key_len, const uint8_t *key,
   auto *bucket = &(buckets_[bucket_idx]);
   auto orig_bucket_idx = bucket_idx;
 
-  hint_write_fault_pb_safe(bucket, sizeof(BucketEntry));  /* preload hint */
   while (unlikely(!bucket->spin.TryLockWp())) {
     thread_yield();
   }
   auto bucket_lock_guard = helpers::finally([&]() { bucket->spin.UnlockWp(); });
 
+  hint_read_fault((void*) &bucket->bitmap);   /* preload hint */
   uint32_t bitmap = load_acquire(&(bucket->bitmap));
   while (bitmap) {
     auto offset = helpers::bsf_32(bitmap);
     auto *bucket = &buckets_[bucket_idx];
     auto *entry = bucket + offset;
     auto *header = entry->ptr;
-    hint_write_fault((void*) header);    /* preload hint */
+    hint_read_fault((void*) &header->key_len);   /* preload hint */
     if (header->key_len == key_len) {
       auto *slab_val_ptr =
           reinterpret_cast<char *>(header) + sizeof(KVDataHeader);
@@ -204,6 +205,7 @@ bool LocalGenericConcurrentHopscotch::put(uint8_t key_len, const uint8_t *key,
       }
 
       // Lock and recheck bitmap.
+      // hint_write_fault((void*) anchor_entry);   /* preload hint */
       while (unlikely(!anchor_entry->spin.TryLockWp())) {
         thread_yield();
       }
@@ -223,6 +225,8 @@ bool LocalGenericConcurrentHopscotch::put(uint8_t key_len, const uint8_t *key,
       // Swap entry [closest_bucket + offset] and [bucket_idx]
       auto *from_entry = &buckets_[idx + offset];
       auto *to_entry = &buckets_[bucket_idx];
+      // hint_write_fault((void*) from_entry);   /* preload hint */
+      // hint_write_fault((void*) to_entry);   /* preload hint */
 
       to_entry->ptr = from_entry->ptr;
       assert((anchor_entry->bitmap & (1 << distance)) == 0);
@@ -249,12 +253,14 @@ bool LocalGenericConcurrentHopscotch::put(uint8_t key_len, const uint8_t *key,
 
   // Allocate memory.
   auto *final_entry = &buckets_[bucket_idx];
+  // hint_write_fault((void*) final_entry);   /* preload hint */
   auto *header = reinterpret_cast<KVDataHeader *>(
       slab_.allocate(sizeof(KVDataHeader) + key_len + val_len));
   BUG_ON(!header);
   final_entry->ptr = header;
 
   // Write object.
+  // hint_write_fault((void*) header);   /* preload hint */
   *header = {.key_len = key_len, .val_len = val_len};
   auto *slab_val_ptr = reinterpret_cast<char *>(header) + sizeof(KVDataHeader);
   memcpy(slab_val_ptr + val_len, key, key_len);

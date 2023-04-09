@@ -23,6 +23,7 @@ extern "C" {
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <unistd.h>
@@ -224,6 +225,8 @@ private:
     for (auto &thread : threads) {
       thread.Join();
     }
+
+    std::cout << "generating zipf distribution" << std::endl;
     preempt_disable();
     zipf_table_distribution<> zipf(kNumReqs, kZipfParamS);
     auto &generator = generators[ get_core_num_v2()];
@@ -367,9 +370,14 @@ private:
           {
             array_index %= kNumArrayEntries;
             const auto &array_entry = array[array_index];
-            preempt_disable();
+#ifdef SET_PRIORITY
+            hint_read_fault_prio((void*) array_entry.data, 1);
+            hint_read_fault_prio((void*) ((unsigned long)(array_entry.data) + EDEN_PAGE_SIZE), 1);
+#else
             hint_read_fault((void*) array_entry.data);
             hint_read_fault((void*) ((unsigned long)(array_entry.data) + EDEN_PAGE_SIZE));
+#endif
+            preempt_disable();
             consume_array_entry(array_entry);
             preempt_enable();
           }
@@ -421,6 +429,10 @@ public:
 //            kCacheSize, kNumGCThreads,
 //            new TCPDevice(raddr, kNumConnections, kFarMemSize)));
     do_work();
+  }
+
+  ~FarMemTest() {
+    /* do nothing */
   }
 };
 //} // namespace far_memory

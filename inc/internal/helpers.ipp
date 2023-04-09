@@ -1,6 +1,7 @@
 #pragma once
 
 extern "C" {
+#include <base/mem.h>
 #include <base/time.h>
 #include <runtime/preempt.h>
 #include <runtime/timer.h>
@@ -24,9 +25,14 @@ static FORCE_INLINE void *allocate_hugepage(uint64_t size) {
   size = round_to_hugepage_size(size);
   void *ptr = nullptr;
   preempt_disable();
-  int fail = posix_memalign(&ptr, kHugepageSize, size);
-  BUG_ON(fail);
-  BUG_ON(madvise(ptr, size, MADV_HUGEPAGE) != 0);
+  // std:cout << "allocate_hugepage: " << size << std::endl;
+  // int fail = posix_memalign(&ptr, kHugepageSize, size);
+  // BUG_ON(fail);
+  // BUG_ON(madvise(ptr, size, MADV_HUGEPAGE) != 0);
+  // mmap() hugepages
+  ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE,
+    MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+  BUG_ON(!ptr);
   preempt_enable();
   return ptr;
 }
