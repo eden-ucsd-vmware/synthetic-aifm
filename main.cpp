@@ -371,10 +371,18 @@ private:
             array_index %= kNumArrayEntries;
             const auto &array_entry = array[array_index];
 #ifdef SET_PRIORITY
+#ifdef USE_READAHEAD
+            hint_fault((void*) array_entry.data, false, 1, 1);
+#else
             hint_read_fault_prio((void*) array_entry.data, 1);
+#endif
             hint_read_fault_prio((void*) ((unsigned long)(array_entry.data) + EDEN_PAGE_SIZE), 1);
 #else
+#ifdef USE_READAHEAD
+            hint_read_fault_rdahead((void*) array_entry.data, 1);
+#else
             hint_read_fault((void*) array_entry.data);
+#endif
             hint_read_fault((void*) ((unsigned long)(array_entry.data) + EDEN_PAGE_SIZE));
 #endif
             preempt_disable();
@@ -417,6 +425,7 @@ public:
 //    array_ptr->disable_prefetch();
 //    prepare(array_ptr);
     
+    sleep(2);
     std::cout << "Bench..." << std::endl;
     save_checkpoint("run_start");
     bench(hopscotch, array_ptr);

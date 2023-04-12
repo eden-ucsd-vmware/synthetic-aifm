@@ -137,17 +137,18 @@ bool LocalGenericConcurrentHopscotch::put(uint8_t key_len, const uint8_t *key,
   auto *bucket = &(buckets_[bucket_idx]);
   auto orig_bucket_idx = bucket_idx;
 
+  hint_write_fault((void*) bucket);   /* preload hint */
   while (unlikely(!bucket->spin.TryLockWp())) {
     thread_yield();
   }
   auto bucket_lock_guard = helpers::finally([&]() { bucket->spin.UnlockWp(); });
 
-  hint_read_fault((void*) &bucket->bitmap);   /* preload hint */
   uint32_t bitmap = load_acquire(&(bucket->bitmap));
   while (bitmap) {
     auto offset = helpers::bsf_32(bitmap);
     auto *bucket = &buckets_[bucket_idx];
     auto *entry = bucket + offset;
+    hint_read_fault((void*) &entry->ptr);    /* preload hint */
     auto *header = entry->ptr;
     hint_read_fault((void*) &header->key_len);   /* preload hint */
     if (header->key_len == key_len) {
@@ -178,6 +179,7 @@ bool LocalGenericConcurrentHopscotch::put(uint8_t key_len, const uint8_t *key,
   // The key does not exist. Use linear probing to find the first empty slot.
   while (bucket_idx < kNumEntries_) {
     auto *entry = &buckets_[bucket_idx];
+    hint_write_fault((void*) entry);    /* preload hint */
     if (__sync_bool_compare_and_swap(reinterpret_cast<uint64_t *>(&entry->ptr),
                                      0, BucketEntry::kBusyPtr)) {
       break;
@@ -260,7 +262,7 @@ bool LocalGenericConcurrentHopscotch::put(uint8_t key_len, const uint8_t *key,
   final_entry->ptr = header;
 
   // Write object.
-  // hint_write_fault((void*) header);   /* preload hint */
+  hint_write_fault((void*) header);   /* preload hint */
   *header = {.key_len = key_len, .val_len = val_len};
   auto *slab_val_ptr = reinterpret_cast<char *>(header) + sizeof(KVDataHeader);
   memcpy(slab_val_ptr + val_len, key, key_len);
@@ -268,6 +270,7 @@ bool LocalGenericConcurrentHopscotch::put(uint8_t key_len, const uint8_t *key,
   wmb();
 
   // Update the bitmap of the final bucket.
+  hint_write_fault((void *) &bucket->bitmap);    /* preload hint */
   assert((bucket->bitmap & (1 << distance_to_orig_bucket)) == 0);
   bucket->bitmap |= (1 << distance_to_orig_bucket);
   return false;
