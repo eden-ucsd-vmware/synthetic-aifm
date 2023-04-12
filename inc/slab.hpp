@@ -10,7 +10,7 @@
 
 class Slab {
 public:
-  constexpr static uint8_t kNumSlabClasses = 7;
+  constexpr static uint8_t kNumSlabClasses = 8;
   constexpr static uint32_t kMinSlabClassShift = 5;
   constexpr static uint32_t kMinSlabClassSize = (1 << kMinSlabClassShift);
   constexpr static uint32_t kMaxSlabClassSize =

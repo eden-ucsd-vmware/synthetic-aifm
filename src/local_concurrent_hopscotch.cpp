@@ -17,7 +17,7 @@ LocalGenericConcurrentHopscotch::LocalGenericConcurrentHopscotch(
     : kHashMask_((1 << num_entries_shift) - 1),
       kNumEntries_((1 << num_entries_shift) + kNeighborhood),
       slab_base_addr_(
-          reinterpret_cast<uint64_t>(malloc(data_size))),
+          reinterpret_cast<uint64_t>(aligned_alloc(EDEN_PAGE_SIZE, data_size))),
       slab_(reinterpret_cast<uint8_t *>(slab_base_addr_), data_size) {
   // Check overflow.
   BUG_ON(((kHashMask_ + 1) >> num_entries_shift) != 1);
