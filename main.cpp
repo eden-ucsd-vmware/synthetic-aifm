@@ -292,12 +292,12 @@ private:
         //     (double)((sum_hashtable_misses - prev_sum_hashtable_misses) +
         //              (sum_array_misses - prev_sum_array_misses)) /
         //               (us - prev_us) * 1.098;
-        mops_records.push_back(mops);
+        // mops_records.push_back(mops);
 //        hashtable_miss_rate_records.push_back(hashtable_miss_rate);
 //        array_miss_rate_records.push_back(array_miss_rate);
         // net_reads_records.push_back(net_read_rate);
-        us = microtime();
-        running_us += (us - prev_us);
+        // us = microtime();
+        // running_us += (us - prev_us);
         if (print_times++ >= kPrintTimes) {
           // constexpr double kRatioChosenRecords = 0.1;
           // uint32_t num_chosen_records =
@@ -313,9 +313,10 @@ private:
           // net_reads_records.erase(net_reads_records.begin(),
           //                         net_reads_records.end() - num_chosen_records);
           std::cout << "mops = "
-                    << accumulate(mops_records.begin(), mops_records.end(),
-                                  0.0) /
-                           mops_records.size()
+                    // << accumulate(mops_records.begin(), mops_records.end(),
+                    //               0.0) /
+                    //        mops_records.size()
+                    << mops
                     << std::endl;
 //          std::cout << "hashtable miss rate = "
 //                    << accumulate(hashtable_miss_rate_records.begin(),
