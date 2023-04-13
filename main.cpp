@@ -65,10 +65,10 @@ private:
   constexpr static uint32_t kLog10NumKeysPerRequest =
       helpers::static_log(10, kNumKeysPerRequest);
   constexpr static uint32_t kReqLen = kKeyLen - kLog10NumKeysPerRequest;
-  constexpr static uint32_t kReqSeqLen = kNumReqs;
+  constexpr static uint32_t kReqSeqLen = (10*1024*1024);
 
   // Output.
-  constexpr static uint32_t kPrintPerIters = 8192;
+  constexpr static uint32_t kPrintPerIters = 1024;
   constexpr static uint32_t kMaxPrintIntervalUs = 1000 * 1000; // 1 second(s).
   constexpr static uint32_t kPrintTimes = 100;
 
@@ -98,6 +98,7 @@ private:
   std::unique_ptr<std::mt19937> generators[helpers::kNumCPUs];
   alignas(helpers::kHugepageSize) Req all_gen_reqs[kNumReqs];
   uint32_t all_zipf_req_indices[helpers::kNumCPUs][kReqSeqLen];
+  uint32_t arr_zipf_req_indices[helpers::kNumCPUs][kReqSeqLen];
   
   Cnt req_cnts[kNumMutatorThreads];
 //  Cnt local_array_miss_cnts[kNumMutatorThreads];
@@ -119,6 +120,8 @@ private:
   unsigned char iv[CryptoPP::AES::BLOCKSIZE];
   std::unique_ptr<CryptoPP::CBC_Mode_ExternalCipher::Encryption> cbcEncryption;
   std::unique_ptr<CryptoPP::AES::Encryption> aesEncryption;
+
+  alignas(64) bool stop = false;
 
   inline void append_uint32_to_char_array(uint32_t n, uint32_t suffix_len,
                                           char *array) {
@@ -229,13 +232,17 @@ private:
     std::cout << "generating zipf distribution" << std::endl;
     preempt_disable();
     zipf_table_distribution<> zipf(kNumReqs, kZipfParamS);
-    auto &generator = generators[ get_core_num_v2()];
+    zipf_table_distribution<> zipf2(kNumArrayEntries, kZipfParamS);
+    auto &generator = generators[get_core_num_v2()];
     constexpr uint32_t kPerCoreWinInterval = kReqSeqLen / helpers::kNumCPUs;
     for (uint32_t i = 0; i < kReqSeqLen; i++) {
       auto rand_idx = zipf(*generator);
+      auto rand_idx2 = zipf2(*generator);
       for (uint32_t j = 0; j < helpers::kNumCPUs; j++) {
         all_zipf_req_indices[j][(i + (j * kPerCoreWinInterval)) % kReqSeqLen] =
             rand_idx;
+        arr_zipf_req_indices[j][(i + (j * kPerCoreWinInterval)) % kReqSeqLen] =
+            rand_idx2;
       }
     }
     preempt_enable();
@@ -281,23 +288,30 @@ private:
 //        auto array_miss_rate =
 //            (double)(sum_array_misses - prev_sum_array_misses) /
 //            (sum_reqs - prev_sum_reqs);
+        // auto net_read_rate =
+        //     (double)((sum_hashtable_misses - prev_sum_hashtable_misses) +
+        //              (sum_array_misses - prev_sum_array_misses)) /
+        //               (us - prev_us) * 1.098;
         mops_records.push_back(mops);
 //        hashtable_miss_rate_records.push_back(hashtable_miss_rate);
 //        array_miss_rate_records.push_back(array_miss_rate);
+        // net_reads_records.push_back(net_read_rate);
         us = microtime();
         running_us += (us - prev_us);
         if (print_times++ >= kPrintTimes) {
-          constexpr double kRatioChosenRecords = 0.1;
-          uint32_t num_chosen_records =
-              mops_records.size() * kRatioChosenRecords;
-          mops_records.erase(mops_records.begin(),
-                             mops_records.end() - num_chosen_records);
+          // constexpr double kRatioChosenRecords = 0.1;
+          // uint32_t num_chosen_records =
+          //     mops_records.size() * kRatioChosenRecords;
+          // mops_records.erase(mops_records.begin(),
+          //                    mops_records.end() - num_chosen_records);
 //          hashtable_miss_rate_records.erase(hashtable_miss_rate_records.begin(),
 //                                            hashtable_miss_rate_records.end() -
 //                                                num_chosen_records);
 //          array_miss_rate_records.erase(array_miss_rate_records.begin(),
 //                                        array_miss_rate_records.end() -
 //                                            num_chosen_records);
+          // net_reads_records.erase(net_reads_records.begin(),
+          //                         net_reads_records.end() - num_chosen_records);
           std::cout << "mops = "
                     << accumulate(mops_records.begin(), mops_records.end(),
                                   0.0) /
@@ -313,8 +327,11 @@ private:
 //                                  array_miss_rate_records.end(), 0.0) /
 //                           array_miss_rate_records.size()
 //                    << std::endl;
-    	    save_checkpoint("run_end");
-          exit(0);
+          // std::cout << "net read rate = "
+          //           << accumulate(net_reads_records.begin(),
+          //                         net_reads_records.end(), 0.0) /
+          //                  net_reads_records.size()
+          //           << std::endl;
         }
         prev_us = us;
         prev_sum_reqs = sum_reqs;
@@ -326,32 +343,45 @@ private:
     }
   }
 
-  void bench(LocalGenericConcurrentHopscotch *hopscotch, ArrayEntry *array) {
+  void bench(LocalGenericConcurrentHopscotch *hopscotch, ArrayEntry *array,
+      uint64_t time_secs, bool warmup = false) {
     std::vector<rt::Thread> threads;
     prev_us = microtime();
+    ACCESS_ONCE(stop) = false;
     for (uint32_t tid = 0; tid < kNumMutatorThreads; tid++) {
       threads.emplace_back(rt::Thread([&, tid]() {
         uint32_t cnt = 0;
-        printf("benching on core: %d\n", get_core_num_v2());
-        while (1) {
+
+        // printf("benching on core: %d\n", get_core_num_v2());
+        while (!ACCESS_ONCE(stop)) {
           if (unlikely(cnt++ % kPrintPerIters == 0)) {
-            preempt_disable();
-            print_perf();
-            preempt_enable();
+            // preempt_disable();
+            // print_perf();
+            // preempt_enable();
+            /* check for stop */
+            if (microtime() - prev_us > time_secs * 1000000) {
+              ACCESS_ONCE(stop) = true;
+              return;
+            }
+            thread_yield();
           }
+          
           preempt_disable();
           auto core_num =  get_core_num_v2();
           auto req_idx =
               all_zipf_req_indices[core_num][per_core_req_idx[core_num].c];
+          auto array_index =
+              arr_zipf_req_indices[core_num][per_core_req_idx[core_num].c];
           if (unlikely(++per_core_req_idx[core_num].c == kReqSeqLen)) {
-            per_core_req_idx[core_num].c = 0;
+            // per_core_req_idx[core_num].c = 0;
+            std::cout << "ERROR! core " << core_num << " out of requests!" << std::endl;
+            BUG();
           }
           preempt_enable();
 
           auto &req = all_gen_reqs[req_idx];
           Key key;
           memcpy(key.data, req.data, kReqLen);
-          uint32_t array_index = 0;
           {
             for (uint32_t i = 0; i < kNumKeysPerRequest; i++) {
               append_uint32_to_char_array(i, kLog10NumKeysPerRequest,
@@ -364,7 +394,7 @@ private:
                 hopscotch->get(kKeyLen, (const uint8_t *)key.data,
                               &value_len, (uint8_t *)value.data, false);
 //              ACCESS_ONCE(local_hashtable_miss_cnts[tid].c) += forwarded;
-              array_index += value.num;
+              // array_index += value.num;
             }
           }
           {
@@ -399,6 +429,9 @@ private:
     for (auto &thread : threads) {
       thread.Join();
     }
+
+    print_times = 200;  /* just some big value */
+    print_perf();
   }
 
 public:
@@ -425,10 +458,19 @@ public:
 //    array_ptr->disable_prefetch();
 //    prepare(array_ptr);
     
+    /* warmup */
+    sleep(2);
+    std::cout << "Warmup..." << std::endl;
+    save_checkpoint("warmup_start");
+    bench(hopscotch, array_ptr, 50, true);
+    save_checkpoint("warmup_end");
+
+    /* run */
     sleep(2);
     std::cout << "Bench..." << std::endl;
     save_checkpoint("run_start");
-    bench(hopscotch, array_ptr);
+    bench(hopscotch, array_ptr, 50);
+    save_checkpoint("run_end");
   }
 
   void run() {
