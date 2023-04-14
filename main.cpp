@@ -257,10 +257,13 @@ private:
     // calculate_and_dump_zipf_curves();
   }
 
-//  void prepare(AppArray *array) {
+ void prepare(FarMemTest::ArrayEntry *array) {
     // We may put something into array for initialization.
     // But for the performance benchmark, we just do nothing here.
-//  }
+      for (uint32_t i = 0;i < kNumArrayEntries;i++) {
+          *(int*)&array[i].data = i;
+      }
+ }
 
   void consume_array_entry(const ArrayEntry &entry) {
     std::string ciphertext;
@@ -458,18 +461,18 @@ public:
 
 //    auto array_ptr = std::unique_ptr<AppArray>(
 //        manager->allocate_array_heap<ArrayEntry, kNumArrayEntries>());
-#ifdef INITIALIZE_ARRAY
-    /* allocate and touch the memory; used to find out max memory */
-    auto array_ptr = new ArrayEntry[kNumArrayEntries+1]();
-#else
+// #ifdef INITIALIZE_ARRAY
+//     /* allocate and touch the memory; used to find out max memory */
+//     auto array_ptr = new ArrayEntry[kNumArrayEntries+1]();
+// #else
     /* just allocate memory; this is the default */
     auto array_ptr = new ArrayEntry[kNumArrayEntries+1];
-#endif
+// #endif
 
     /* making sure the entries aligns with pages */
     array_ptr = (FarMemTest::ArrayEntry*) align_up((unsigned long) array_ptr, EDEN_PAGE_SIZE);
 //    array_ptr->disable_prefetch();
-//    prepare(array_ptr);
+   prepare(array_ptr);
     
     /* warmup */
     sleep(2);
