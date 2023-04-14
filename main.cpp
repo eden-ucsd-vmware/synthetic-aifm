@@ -65,7 +65,8 @@ private:
   constexpr static uint32_t kLog10NumKeysPerRequest =
       helpers::static_log(10, kNumKeysPerRequest);
   constexpr static uint32_t kReqLen = kKeyLen - kLog10NumKeysPerRequest;
-  constexpr static uint32_t kReqSeqLen = (10*1024*1024);
+  constexpr static uint32_t kReqSeqLen = kNumReqs;
+  constexpr static uint32_t kReqSeqLenArr = (1 << 22);
 
   // Output.
   constexpr static uint32_t kPrintPerIters = 1024;
@@ -98,12 +99,13 @@ private:
   std::unique_ptr<std::mt19937> generators[helpers::kNumCPUs];
   alignas(helpers::kHugepageSize) Req all_gen_reqs[kNumReqs];
   uint32_t all_zipf_req_indices[helpers::kNumCPUs][kReqSeqLen];
-  uint32_t arr_zipf_req_indices[helpers::kNumCPUs][kReqSeqLen];
+  uint32_t arr_zipf_req_indices[helpers::kNumCPUs][kReqSeqLenArr];
   
   Cnt req_cnts[kNumMutatorThreads];
 //  Cnt local_array_miss_cnts[kNumMutatorThreads];
 //  Cnt local_hashtable_miss_cnts[kNumMutatorThreads];
   Cnt per_core_req_idx[helpers::kNumCPUs];
+  Cnt per_core_req_idx_arr[helpers::kNumCPUs];
 
   std::atomic_flag flag;
   uint64_t print_times = 0;
@@ -232,18 +234,23 @@ private:
     std::cout << "generating zipf distribution" << std::endl;
     preempt_disable();
     zipf_table_distribution<> zipf(kNumReqs, kZipfParamS);
-    zipf_table_distribution<> zipf2(kNumArrayEntries, kZipfParamS);
+    zipf_table_distribution<> zipf2(kReqSeqLenArr, kZipfParamS);
     auto &generator = generators[get_core_num_v2()];
     constexpr uint32_t kPerCoreWinInterval = kReqSeqLen / helpers::kNumCPUs;
     for (uint32_t i = 0; i < kReqSeqLen; i++) {
       auto rand_idx = zipf(*generator);
-      auto rand_idx2 = zipf2(*generator);
       for (uint32_t j = 0; j < helpers::kNumCPUs; j++) {
         all_zipf_req_indices[j][(i + (j * kPerCoreWinInterval)) % kReqSeqLen] =
             rand_idx;
-        arr_zipf_req_indices[j][(i + (j * kPerCoreWinInterval)) % kReqSeqLen] =
-            rand_idx2;
       }
+    }
+    constexpr uint32_t kPerCoreWinIntervalArr = kReqSeqLenArr / helpers::kNumCPUs;
+    for (uint32_t i = 0; i < kReqSeqLenArr; i++) {
+        auto rand_idx2 = zipf2(*generator);
+        for (uint32_t j = 0; j < helpers::kNumCPUs; j++) {
+            arr_zipf_req_indices[j][(i + (j * kPerCoreWinIntervalArr)) % kReqSeqLenArr] =
+                    rand_idx2;
+        }
     }
     preempt_enable();
 
@@ -372,11 +379,16 @@ private:
           auto req_idx =
               all_zipf_req_indices[core_num][per_core_req_idx[core_num].c];
           auto array_index =
-              arr_zipf_req_indices[core_num][per_core_req_idx[core_num].c];
+              arr_zipf_req_indices[core_num][per_core_req_idx_arr[core_num].c];
           if (unlikely(++per_core_req_idx[core_num].c == kReqSeqLen)) {
-            // per_core_req_idx[core_num].c = 0;
-            std::cout << "ERROR! core " << core_num << " out of requests!" << std::endl;
-            BUG();
+              per_core_req_idx[core_num].c = 0;
+//            std::cout << "ERROR! core " << core_num << " out of requests!" << std::endl;
+//            BUG();
+          }
+          if (unlikely(++per_core_req_idx_arr[core_num].c == kReqSeqLenArr)) {
+              per_core_req_idx_arr[core_num].c = 0;
+//            std::cout << "ERROR! core " << core_num << " out of requests!" << std::endl;
+//            BUG();
           }
           preempt_enable();
 
@@ -463,14 +475,14 @@ public:
     sleep(2);
     std::cout << "Warmup..." << std::endl;
     save_checkpoint("warmup_start");
-    bench(hopscotch, array_ptr, 50, true);
+    bench(hopscotch, array_ptr, 120, true);
     save_checkpoint("warmup_end");
 
     /* run */
     sleep(2);
     std::cout << "Bench..." << std::endl;
     save_checkpoint("run_start");
-    bench(hopscotch, array_ptr, 50);
+    bench(hopscotch, array_ptr, 30);
     save_checkpoint("run_end");
   }
 
