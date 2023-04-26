@@ -6,7 +6,7 @@ librt_libs = $(SHENANGO_PATH)/bindings/cc/librt++.a
 INC += -I$(SHENANGO_PATH)/bindings/cc -Iinc -I$(SHENANGO_PATH)/ksched \
 	-Isnappy/build -Isnappy
 
-main_src = main.cpp
+main_src = app/main.cpp
 main_obj = $(main_src:.cpp=.o)
 
 lib_src = src/local_concurrent_hopscotch.cpp src/slab.cpp src/helpers.cpp src/MurmurHash3.cpp
